@@ -49,6 +49,12 @@ uint16_t PC_START = 0x3000;
  */
 uint16_t mem_read(uint16_t address)
 {
+  if (is_user_mode() && (address < 0x3000 || address > 0xFDFF))
+  {
+    except(0x02);
+    return 0x0000;
+  }
+
   if (address == KBDR_ADDR)
   {
     iomap[KBSR] &= 0x7FFF;
@@ -74,6 +80,12 @@ uint16_t mem_read(uint16_t address)
  */
 void mem_write(uint16_t address, uint16_t val)
 {
+  if (is_user_mode() && (address < 0x3000 || address > 0xFDFF))
+  {
+    except(0x02);
+    return;
+  }
+
   if (address == DDR_ADDR)
   {
     iomap[DSR] &= 0x7FFF;
@@ -81,7 +93,6 @@ void mem_write(uint16_t address, uint16_t val)
 
   mem[address] = val;
 }
-
 /** @brief sign extend bits
  *
  * Given a 16-bit value and a sign position, perform a twos-complement sign
@@ -469,11 +480,19 @@ void jsr(uint16_t i)
  */
 void rti(uint16_t i)
 {
-  reg[PSR] = mem_read(reg[R6]);
+  if (is_user_mode())
+  {
+    except(0x00);
+    return;
+  }
+
+  uint16_t restored_psr = mem_read(reg[R6]);
   pop();
 
   reg[RPC] = mem_read(reg[R6]);
   pop();
+
+  reg[PSR] = restored_psr;
 
   if (is_user_mode())
   {
@@ -492,7 +511,10 @@ void rti(uint16_t i)
  *   destination and source register operands, and to extract the
  *   second source register or the immediate value encoded in the
  */
-void res(uint16_t i) {}
+void res(uint16_t i) 
+{
+  except(0x01);
+}
 
 /** @brief trap instruction
  *
@@ -521,8 +543,7 @@ void trap(uint16_t i)
   push(reg[RPC]);
   push(original_psr);
 
-  uint16_t trap_vector = TRP(i);
-  reg[RPC] = mem_read(trap_vector);
+  reg[RPC] = mem_read(0x0000 + TRP(i));
 }
 
 /**
@@ -888,3 +909,19 @@ bool is_running()
  *   the exception vector number we use to index into the exception service
  *   vector table.
  */
+void except(uint16_t i)
+{
+  uint16_t original_psr = reg[PSR];
+
+  if (is_user_mode())
+  {
+    reg[USP] = reg[R6];
+    reg[R6] = reg[SSP];
+    supervisor_mode();
+  }
+
+  push(reg[RPC]);
+  push(original_psr);
+
+  reg[RPC] = mem_read(0x0100 + TRP(i));
+}
